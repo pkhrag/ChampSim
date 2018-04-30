@@ -23,6 +23,12 @@ void CACHE::handle_fill()
         uint32_t set = get_set(MSHR.entry[mshr_index].address), way;
         if (cache_type == IS_LLC) {
             way = llc_find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
+            if (way >= 0)
+            {
+                uint64_t block_addr = block[set][way].address;
+                evict_from_parent(block_addr, MSHR.entry[mshr_index].instr_id);
+                TOTAL_REPL++;
+            }
         }
         else
             way = find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
@@ -33,7 +39,6 @@ void CACHE::handle_fill()
             // update replacement policy
             if (cache_type == IS_LLC) {
                 llc_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, 0, MSHR.entry[mshr_index].type, 0);
-
             }
             else
                 update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, 0, MSHR.entry[mshr_index].type, 0);
@@ -299,6 +304,12 @@ void CACHE::handle_writeback()
                 uint32_t set = get_set(WQ.entry[index].address), way;
                 if (cache_type == IS_LLC) {
                     way = llc_find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
+                    if (way >= 0)
+                    {
+                        uint64_t block_addr = block[set][way].address;
+                        evict_from_parent(block_addr, WQ.entry[index].instr_id);
+                        TOTAL_REPL++;
+                    }
                 }
                 else
                     way = find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
@@ -1383,4 +1394,82 @@ uint32_t CACHE::get_size(uint8_t queue_type, uint64_t address)
 void CACHE::increment_WQ_FULL(uint64_t address)
 {
     WQ.FULL++;
+}
+
+void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
+{
+    if (NAME != "LLC") {
+    uint32_t set = get_set(block_addr);
+    int way = -1;
+
+    if (NUM_SET < set) {
+        assert(0);
+    }
+
+    for (way=0; way<NUM_WAY; way++) {
+        if (block[set][way].valid && (block[set][way].tag == block_addr)) {
+
+            block[set][way].valid = 0;
+
+            break;
+        }
+    }
+
+
+    uint32_t fill_cpu = (MSHR.next_fill_index == MSHR_SIZE) ? NUM_CPUS : MSHR.entry[MSHR.next_fill_index].cpu;
+    uint32_t mshr_index = MSHR.next_fill_index;
+
+        if (block[set][way].dirty) {
+
+            // check if the lower level WQ has enough room to keep this writeback request
+            if (lower_level) {
+                if (lower_level->get_occupancy(2, block[set][way].address) == lower_level->get_size(2, block[set][way].address)) {
+
+                    // lower level WQ is full, cannot replace this victim
+                    lower_level->increment_WQ_FULL(block[set][way].address);
+                    STALL[MSHR.entry[mshr_index].type]++;
+                }
+                else {
+                    PACKET writeback_packet;
+
+                    writeback_packet.fill_level = fill_level << 1;
+                    writeback_packet.cpu = fill_cpu;
+                    writeback_packet.address = block[set][way].address;
+                    writeback_packet.full_addr = block[set][way].full_addr;
+                    writeback_packet.data = block[set][way].data;
+                    writeback_packet.instr_id = instr_id;
+                    writeback_packet.ip = 0; // writeback does not have ip
+                    writeback_packet.type = WRITEBACK;
+                    writeback_packet.event_cycle = current_core_cycle[fill_cpu];
+
+                    lower_level->add_wq(&writeback_packet);
+                }
+            }
+#ifdef SANITY_CHECK
+            else {
+                // sanity check
+                if (cache_type != IS_STLB)
+                    assert(0);
+            }
+#endif
+        }
+
+
+    int hit = invalidate_entry(block_addr);
+    if (hit != -1){
+        BACK_HITS++;    
+    }
+    
+    }
+    for (int i = 0; i < NUM_CPUS; i++) {
+        if (upper_level_icache[i] == NULL)
+            return;
+        if (upper_level_dcache[i] == NULL)
+            return;
+        else
+        {
+            upper_level_icache[i]->evict_from_parent(block_addr, instr_id);
+            upper_level_dcache[i]->evict_from_parent(block_addr, instr_id);
+        }
+    }
 }

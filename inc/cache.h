@@ -46,7 +46,7 @@ extern uint32_t PAGE_TABLE_LATENCY, SWAP_LATENCY;
 #define L1I_SET 64
 #define L1I_WAY 8
 #define L1I_RQ_SIZE 64
-#define L1I_WQ_SIZE 64 
+#define L1I_WQ_SIZE 128 
 #define L1I_PQ_SIZE 64
 #define L1I_MSHR_SIZE 8
 #define L1I_LATENCY 1
@@ -55,7 +55,7 @@ extern uint32_t PAGE_TABLE_LATENCY, SWAP_LATENCY;
 #define L1D_SET 64
 #define L1D_WAY 8
 #define L1D_RQ_SIZE 64
-#define L1D_WQ_SIZE 64 
+#define L1D_WQ_SIZE 128 
 #define L1D_PQ_SIZE 64
 #define L1D_MSHR_SIZE 8
 #define L1D_LATENCY 4 
@@ -64,7 +64,7 @@ extern uint32_t PAGE_TABLE_LATENCY, SWAP_LATENCY;
 #define L2C_SET 512
 #define L2C_WAY 8
 #define L2C_RQ_SIZE 32
-#define L2C_WQ_SIZE 32
+#define L2C_WQ_SIZE 128
 #define L2C_PQ_SIZE 32
 #define L2C_MSHR_SIZE 16
 #define L2C_LATENCY 8  // 4 (L1I or L1D) + 8 = 12 cycles
@@ -95,6 +95,9 @@ class CACHE : public MEMORY {
              pf_useful,
              pf_useless,
              pf_fill;
+
+    // back hit stats
+    uint64_t BACK_HITS, TOTAL_REPL;
 
     // queues
     PACKET_QUEUE WQ{NAME + "_WQ", WQ_SIZE}, // write queue
@@ -151,6 +154,9 @@ class CACHE : public MEMORY {
         pf_useful = 0;
         pf_useless = 0;
         pf_fill = 0;
+
+        BACK_HITS = 0;
+        TOTAL_REPL = 0;
     };
 
     // destructor
@@ -167,7 +173,8 @@ class CACHE : public MEMORY {
 
     void return_data(PACKET *packet),
          operate(),
-         increment_WQ_FULL(uint64_t address);
+         increment_WQ_FULL(uint64_t address),
+         evict_from_parent(uint64_t block_addr, uint64_t instr_id);
 
     uint32_t get_occupancy(uint8_t queue_type, uint64_t address),
              get_size(uint8_t queue_type, uint64_t address);
@@ -204,6 +211,8 @@ class CACHE : public MEMORY {
          //prefetcher_final_stats(),
          l1d_prefetcher_final_stats(),
          l2c_prefetcher_final_stats();
+    
+    //remove block from parent cache to make LLC inclusive
 
     uint32_t get_set(uint64_t address),
              get_way(uint64_t address, uint32_t set),

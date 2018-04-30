@@ -540,6 +540,11 @@ void MEMORY_CONTROLLER::return_data(PACKET *packet)
 
 }
 
+void MEMORY_CONTROLLER::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
+{
+
+}
+
 void MEMORY_CONTROLLER::update_schedule_cycle(PACKET_QUEUE *queue)
 {
     // update next_schedule_cycle
