@@ -23,12 +23,6 @@ void CACHE::handle_fill()
         uint32_t set = get_set(MSHR.entry[mshr_index].address), way;
         if (cache_type == IS_LLC) {
             way = llc_find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
-            if (way >= 0)
-            {
-                uint64_t block_addr = block[set][way].address;
-                evict_from_parent(block_addr, MSHR.entry[mshr_index].instr_id);
-                TOTAL_REPL++;
-            }
         }
         else
             way = find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
@@ -119,6 +113,16 @@ void CACHE::handle_fill()
             // update replacement policy
             if (cache_type == IS_LLC) {
                 llc_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, block[set][way].full_addr, MSHR.entry[mshr_index].type, 0);
+                if (way >= 0)
+                {
+                    uint64_t block_addr = block[set][way].address;
+                    if (block_addr)
+                    {
+                        //cout << "handle fill fir se" << endl;
+                        evict_from_parent(block_addr, MSHR.entry[mshr_index].instr_id);
+                        TOTAL_REPL++;
+                    }
+                }
 
             }
             else
@@ -160,7 +164,6 @@ void CACHE::handle_fill()
                 if (PROCESSED.occupancy < PROCESSED.SIZE)
                     PROCESSED.add_queue(&MSHR.entry[mshr_index]);
             }
-            //else if (cache_type == IS_L1D) {
             else if ((cache_type == IS_L1D) && (MSHR.entry[mshr_index].type != PREFETCH)) {
                 if (PROCESSED.occupancy < PROCESSED.SIZE)
                     PROCESSED.add_queue(&MSHR.entry[mshr_index]);
@@ -304,12 +307,6 @@ void CACHE::handle_writeback()
                 uint32_t set = get_set(WQ.entry[index].address), way;
                 if (cache_type == IS_LLC) {
                     way = llc_find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
-                    if (way >= 0)
-                    {
-                        uint64_t block_addr = block[set][way].address;
-                        evict_from_parent(block_addr, WQ.entry[index].instr_id);
-                        TOTAL_REPL++;
-                    }
                 }
                 else
                     way = find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
@@ -375,6 +372,15 @@ void CACHE::handle_writeback()
                     // update replacement policy
                     if (cache_type == IS_LLC) {
                         llc_update_replacement_state(writeback_cpu, set, way, WQ.entry[index].full_addr, WQ.entry[index].ip, block[set][way].full_addr, WQ.entry[index].type, 0);
+                        if (way >= 0)
+                        {
+                            uint64_t block_addr = block[set][way].address;
+                            if (block_addr)
+                            {
+                                evict_from_parent(block_addr, WQ.entry[index].instr_id);
+                                TOTAL_REPL++;
+                            }
+                        }
 
                     }
                     else
@@ -1399,6 +1405,7 @@ void CACHE::increment_WQ_FULL(uint64_t address)
 void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
 {
     if (NAME != "LLC") {
+    //cout << NAME << ", addr=" <<hex << block_addr << dec << endl;
     uint32_t set = get_set(block_addr);
     int way = -1;
 
@@ -1409,7 +1416,8 @@ void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
     for (way=0; way<NUM_WAY; way++) {
         if (block[set][way].valid && (block[set][way].tag == block_addr)) {
 
-            block[set][way].valid = 0;
+            //block[set][way].valid = 0;
+            //cout << "found the way " << way << endl;
 
             break;
         }
@@ -1417,6 +1425,11 @@ void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
 
 
     uint32_t fill_cpu = (MSHR.next_fill_index == MSHR_SIZE) ? NUM_CPUS : MSHR.entry[MSHR.next_fill_index].cpu;
+    if (MSHR.next_fill_cycle <= current_core_cycle[fill_cpu]) {
+#ifdef SANITY_CHECK
+        if (MSHR.next_fill_index >= MSHR.SIZE)
+            assert(0);
+#endif
     uint32_t mshr_index = MSHR.next_fill_index;
 
         if (block[set][way].dirty) {
@@ -1426,21 +1439,25 @@ void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
                 if (lower_level->get_occupancy(2, block[set][way].address) == lower_level->get_size(2, block[set][way].address)) {
 
                     // lower level WQ is full, cannot replace this victim
+                    cout << "It happened" << endl;
                     lower_level->increment_WQ_FULL(block[set][way].address);
                     STALL[MSHR.entry[mshr_index].type]++;
-                }
-                else {
-                    PACKET writeback_packet;
 
+                }
+                else { 
+                    PACKET writeback_packet;
+                    
+                    //writeback_packet = (PACKET*)malloc(sizeof(PACKET));
                     writeback_packet.fill_level = fill_level << 1;
                     writeback_packet.cpu = fill_cpu;
                     writeback_packet.address = block[set][way].address;
                     writeback_packet.full_addr = block[set][way].full_addr;
                     writeback_packet.data = block[set][way].data;
-                    writeback_packet.instr_id = instr_id;
+                    writeback_packet.instr_id = MSHR.entry[mshr_index].instr_id;
                     writeback_packet.ip = 0; // writeback does not have ip
                     writeback_packet.type = WRITEBACK;
                     writeback_packet.event_cycle = current_core_cycle[fill_cpu];
+
 
                     lower_level->add_wq(&writeback_packet);
                 }
@@ -1454,12 +1471,12 @@ void CACHE::evict_from_parent(uint64_t block_addr, uint64_t instr_id)
 #endif
         }
 
+    } 
 
     int hit = invalidate_entry(block_addr);
     if (hit != -1){
         BACK_HITS++;    
     }
-    
     }
     for (int i = 0; i < NUM_CPUS; i++) {
         if (upper_level_icache[i] == NULL)
